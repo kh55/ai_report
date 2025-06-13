@@ -98,7 +98,7 @@ jobs:
             local url=$1
             local response
             echo "::debug::Making API request to: $url" >&2
-            response=$(curl -s -w "\n%{http_code}" -H "Authorization: Bearer $GH_TOKEN" "$url")
+            response=$(curl -s -w "\n%{http_code}" -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github.v3+json" "$url")
             local status_code=$(echo "$response" | tail -n1)
             local body=$(echo "$response" | sed '$d')
             
@@ -107,6 +107,11 @@ jobs:
             
             if [ "$status_code" -ne 200 ]; then
               handle_error "GitHub API request failed with status $status_code: $body"
+            fi
+            
+            # JSONの検証
+            if ! echo "$body" | jq -e . >/dev/null 2>&1; then
+              handle_error "Invalid JSON response: $body"
             fi
             
             echo "$body"
@@ -152,7 +157,8 @@ jobs:
             
             ai_count=$(echo "$ai_response" | jq -r '.total_count')
             if [ "$ai_count" = "null" ]; then
-              handle_error "Failed to parse AI PR count for repo $repo: $ai_response"
+              echo "::warning::No AI PR count found for repo $repo, using 0"
+              ai_count=0
             fi
             echo "AI PR count for $repo: $ai_count"
             repo_ai_counts[$repo]=$ai_count
@@ -170,7 +176,8 @@ jobs:
             
             all_count=$(echo "$all_response" | jq -r '.total_count')
             if [ "$all_count" = "null" ]; then
-              handle_error "Failed to parse total PR count for repo $repo: $all_response"
+              echo "::warning::No total PR count found for repo $repo, using 0"
+              all_count=0
             fi
             echo "Total PR count for $repo: $all_count"
             repo_all_counts[$repo]=$all_count
