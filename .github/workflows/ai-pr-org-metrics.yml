@@ -1,0 +1,49 @@
+name: ai-pr-org-metrics
+on:
+  schedule:
+    - cron: '0 0 * * 1'   # 月曜 0:00 UTC = 9:00 JST
+  workflow_dispatch:      # 手動実行を有効化
+    inputs:
+      start_date:
+        description: '開始日 (YYYY-MM-DD)'
+        required: false
+        type: string
+      end_date:
+        description: '終了日 (YYYY-MM-DD)'
+        required: false
+        type: string
+
+jobs:
+  calc:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get counts
+        id: counts
+        env:
+          GH_TOKEN: ${{ secrets.METRICS_TOKEN }}
+          ORG: MyOrg
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.start_date }}" ] && [ -n "${{ github.event.inputs.end_date }}" ]; then
+            start="${{ github.event.inputs.start_date }}"
+            end="${{ github.event.inputs.end_date }}"
+          else
+            start=$(date -u -d 'last week monday' +%F)
+            end=$(date -u -d 'last week sunday' +%F)
+          fi
+          ai=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/search/issues?q=org:$ORG+is:pr+is:merged+label:ai+merged:$start..$end" | jq .total_count)
+          all=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/search/issues?q=org:$ORG+is:pr+is:merged+merged:$start..$end" | jq .total_count)
+          pct=0; [ "$all" -gt 0 ] && pct=$(echo "scale=1; $ai*100/$all" | bc)
+          echo "ai=$ai"   >> $GITHUB_OUTPUT
+          echo "all=$all" >> $GITHUB_OUTPUT
+          echo "pct=$pct" >> $GITHUB_OUTPUT
+          echo "start=$start" >> $GITHUB_OUTPUT
+          echo "end=$end" >> $GITHUB_OUTPUT
+
+      - name: Summary
+        run: |
+          echo "### AI PR 比率 (${{ steps.counts.outputs.start }}–${{ steps.counts.outputs.end }})" >> $GITHUB_STEP_SUMMARY
+          echo "- AI PR: ${{ steps.counts.outputs.ai }}" >> $GITHUB_STEP_SUMMARY
+          echo "- 全 PR: ${{ steps.counts.outputs.all }}" >> $GITHUB_STEP_SUMMARY
+          echo "- 比 率: ${{ steps.counts.outputs.pct }}%" >> $GITHUB_STEP_SUMMARY 
