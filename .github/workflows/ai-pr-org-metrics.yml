@@ -97,13 +97,13 @@ jobs:
           make_api_request() {
             local url=$1
             local response
-            echo "Making API request to: $url"
+            echo "::debug::Making API request to: $url" >&2
             response=$(curl -s -w "\n%{http_code}" -H "Authorization: Bearer $GH_TOKEN" "$url")
             local status_code=$(echo "$response" | tail -n1)
             local body=$(echo "$response" | sed '$d')
             
-            echo "Response status code: $status_code"
-            echo "Response body: $body"
+            echo "::debug::Response status code: $status_code" >&2
+            echo "::debug::Response body: $body" >&2
             
             if [ "$status_code" -ne 200 ]; then
               handle_error "GitHub API request failed with status $status_code: $body"
@@ -142,7 +142,7 @@ jobs:
             
             # AIラベルが付いたマージ済みPRの数を取得
             ai_query="https://api.github.com/search/issues?q=repo:$OWNER/$repo+is:pr+is:merged+($label_query)+merged:$start..$end"
-            echo "AI PR query: $ai_query"
+            echo "::debug::AI PR query: $ai_query" >&2
             ai_response=$(make_api_request "$ai_query")
             
             # レスポンスの検証
@@ -160,7 +160,7 @@ jobs:
 
             # 全マージ済みPRの数を取得
             all_query="https://api.github.com/search/issues?q=repo:$OWNER/$repo+is:pr+is:merged+merged:$start..$end"
-            echo "All PR query: $all_query"
+            echo "::debug::All PR query: $all_query" >&2
             all_response=$(make_api_request "$all_query")
             
             # レスポンスの検証
