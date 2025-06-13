@@ -16,6 +16,11 @@ on:
         description: '終了日 (YYYY-MM-DD)'
         required: false
         type: string
+      ai_labels:
+        description: 'AI関連PRのラベル（カンマ区切り）'
+        required: false
+        type: string
+        default: 'ai,ai-generated,ai-assist'
 
 jobs:
   # メインの計算ジョブ
@@ -40,6 +45,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.METRICS_TOKEN }}  # GitHub APIの認証トークン
           ORG: MyOrg                              # 対象のGitHub組織名
+          AI_LABELS: ${{ github.event.inputs.ai_labels || 'ai,ai-generated,ai-assist' }}  # AI関連PRのラベル
         run: |
           # エラーハンドリング用の関数
           handle_error() {
@@ -55,6 +61,11 @@ jobs:
           if [ -z "$ORG" ]; then
             handle_error "ORG is not set"
           fi
+
+          # AIラベルの設定
+          # カンマ区切りのラベルを "label:ai OR label:ai-generated" 形式に変換
+          # 大文字小文字を区別しないように、各ラベルを小文字に変換
+          label_query=$(echo "$AI_LABELS" | tr '[:upper:]' '[:lower:]' | tr ',' '\n' | sed 's/^/label:/' | paste -sd ' OR ' -)
 
           # 日付の設定
           # 手動実行で日付が指定された場合はその日付を使用
@@ -96,35 +107,73 @@ jobs:
             echo "$body"
           }
 
-          # AIラベルが付いたマージ済みPRの数を取得
-          ai_response=$(make_api_request "https://api.github.com/search/issues?q=org:$ORG+is:pr+is:merged+label:ai+merged:$start..$end")
-          ai=$(echo "$ai_response" | jq -r '.total_count')
-          if [ "$ai" = "null" ]; then
-            handle_error "Failed to parse AI PR count from response: $ai_response"
-          fi
+          # 組織内のリポジトリ一覧を取得
+          repos_response=$(make_api_request "https://api.github.com/orgs/$ORG/repos?per_page=100")
+          repos=$(echo "$repos_response" | jq -r '.[].name')
 
-          # 全マージ済みPRの数を取得
-          all_response=$(make_api_request "https://api.github.com/search/issues?q=org:$ORG+is:pr+is:merged+merged:$start..$end")
-          all=$(echo "$all_response" | jq -r '.total_count')
-          if [ "$all" = "null" ]; then
-            handle_error "Failed to parse total PR count from response: $all_response"
-          fi
+          # リポジトリごとの結果を格納する配列
+          declare -A repo_ai_counts
+          declare -A repo_all_counts
+          total_ai=0
+          total_all=0
 
-          # AI PRの比率を計算（小数点第1位まで）
-          pct=0; [ "$all" -gt 0 ] && pct=$(echo "scale=1; $ai*100/$all" | bc)
+          # 各リポジトリのPR数を取得
+          for repo in $repos; do
+            # AIラベルが付いたマージ済みPRの数を取得
+            ai_response=$(make_api_request "https://api.github.com/search/issues?q=repo:$ORG/$repo+is:pr+is:merged+($label_query)+merged:$start..$end")
+            ai_count=$(echo "$ai_response" | jq -r '.total_count')
+            if [ "$ai_count" = "null" ]; then
+              handle_error "Failed to parse AI PR count for repo $repo: $ai_response"
+            fi
+            repo_ai_counts[$repo]=$ai_count
+            total_ai=$((total_ai + ai_count))
+
+            # 全マージ済みPRの数を取得
+            all_response=$(make_api_request "https://api.github.com/search/issues?q=repo:$ORG/$repo+is:pr+is:merged+merged:$start..$end")
+            all_count=$(echo "$all_response" | jq -r '.total_count')
+            if [ "$all_count" = "null" ]; then
+              handle_error "Failed to parse total PR count for repo $repo: $all_response"
+            fi
+            repo_all_counts[$repo]=$all_count
+            total_all=$((total_all + all_count))
+          done
+
+          # 全体のAI PRの比率を計算（小数点第1位まで）
+          total_pct=0; [ "$total_all" -gt 0 ] && total_pct=$(echo "scale=1; $total_ai*100/$total_all" | bc)
 
           # 結果をGitHub Actionsの出力に保存
-          echo "ai=$ai"   >> $GITHUB_OUTPUT
-          echo "all=$all" >> $GITHUB_OUTPUT
-          echo "pct=$pct" >> $GITHUB_OUTPUT
+          echo "total_ai=$total_ai" >> $GITHUB_OUTPUT
+          echo "total_all=$total_all" >> $GITHUB_OUTPUT
+          echo "total_pct=$total_pct" >> $GITHUB_OUTPUT
           echo "start=$start" >> $GITHUB_OUTPUT
           echo "end=$end" >> $GITHUB_OUTPUT
+          echo "labels=$AI_LABELS" >> $GITHUB_OUTPUT
+
+          # リポジトリごとの結果をJSON形式で保存
+          repo_results="{}"
+          for repo in $repos; do
+            ai_count=${repo_ai_counts[$repo]}
+            all_count=${repo_all_counts[$repo]}
+            pct=0; [ "$all_count" -gt 0 ] && pct=$(echo "scale=1; $ai_count*100/$all_count" | bc)
+            repo_results=$(echo "$repo_results" | jq --arg repo "$repo" \
+              --arg ai "$ai_count" \
+              --arg all "$all_count" \
+              --arg pct "$pct" \
+              '. + {($repo): {"ai": $ai, "all": $all, "pct": $pct}}')
+          done
+          echo "repo_results=$repo_results" >> $GITHUB_OUTPUT
 
       # 結果のサマリーを出力するステップ
       - name: Summary
         run: |
           # GitHub Actionsのステップサマリーに結果を出力
           echo "### AI PR 比率 (${{ steps.counts.outputs.start }}–${{ steps.counts.outputs.end }})" >> $GITHUB_STEP_SUMMARY
-          echo "- AI PR: ${{ steps.counts.outputs.ai }}" >> $GITHUB_STEP_SUMMARY
-          echo "- 全 PR: ${{ steps.counts.outputs.all }}" >> $GITHUB_STEP_SUMMARY
-          echo "- 比 率: ${{ steps.counts.outputs.pct }}%" >> $GITHUB_STEP_SUMMARY 
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "#### 全体" >> $GITHUB_STEP_SUMMARY
+          echo "- AI PR: ${{ steps.counts.outputs.total_ai }}" >> $GITHUB_STEP_SUMMARY
+          echo "- 全 PR: ${{ steps.counts.outputs.total_all }}" >> $GITHUB_STEP_SUMMARY
+          echo "- 比 率: ${{ steps.counts.outputs.total_pct }}%" >> $GITHUB_STEP_SUMMARY
+          echo "- 対象ラベル: ${{ steps.counts.outputs.labels }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "#### リポジトリ別" >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.counts.outputs.repo_results }}" | jq -r 'to_entries | .[] | "- **\(.key)**: AI PR: \(.value.ai), 全 PR: \(.value.all), 比率: \(.value.pct)%"' >> $GITHUB_STEP_SUMMARY 
