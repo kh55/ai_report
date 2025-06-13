@@ -1,7 +1,11 @@
+# AI PRの比率を計算するワークフロー
+# 組織内のAI関連PRの割合を週次で計算し、サマリーを出力します
 name: ai-pr-org-metrics
 on:
+  # 毎週月曜日の0:00 UTC（日本時間9:00）に自動実行
   schedule:
     - cron: '0 0 * * 1'   # 月曜 0:00 UTC = 9:00 JST
+  # 手動実行の設定
   workflow_dispatch:      # 手動実行を有効化
     inputs:
       start_date:
@@ -14,15 +18,20 @@ on:
         type: string
 
 jobs:
+  # メインの計算ジョブ
   calc:
     runs-on: ubuntu-latest
     steps:
+      # PRの数を取得するステップ
       - name: Get counts
         id: counts
         env:
-          GH_TOKEN: ${{ secrets.METRICS_TOKEN }}
-          ORG: MyOrg
+          GH_TOKEN: ${{ secrets.METRICS_TOKEN }}  # GitHub APIの認証トークン
+          ORG: MyOrg                              # 対象のGitHub組織名
         run: |
+          # 日付の設定
+          # 手動実行で日付が指定された場合はその日付を使用
+          # 指定がない場合は前週の月曜日から日曜日を使用
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.start_date }}" ] && [ -n "${{ github.event.inputs.end_date }}" ]; then
             start="${{ github.event.inputs.start_date }}"
             end="${{ github.event.inputs.end_date }}"
@@ -30,19 +39,29 @@ jobs:
             start=$(date -u -d 'last week monday' +%F)
             end=$(date -u -d 'last week sunday' +%F)
           fi
+
+          # AIラベルが付いたマージ済みPRの数を取得
           ai=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
             "https://api.github.com/search/issues?q=org:$ORG+is:pr+is:merged+label:ai+merged:$start..$end" | jq .total_count)
+
+          # 全マージ済みPRの数を取得
           all=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
             "https://api.github.com/search/issues?q=org:$ORG+is:pr+is:merged+merged:$start..$end" | jq .total_count)
+
+          # AI PRの比率を計算（小数点第1位まで）
           pct=0; [ "$all" -gt 0 ] && pct=$(echo "scale=1; $ai*100/$all" | bc)
+
+          # 結果をGitHub Actionsの出力に保存
           echo "ai=$ai"   >> $GITHUB_OUTPUT
           echo "all=$all" >> $GITHUB_OUTPUT
           echo "pct=$pct" >> $GITHUB_OUTPUT
           echo "start=$start" >> $GITHUB_OUTPUT
           echo "end=$end" >> $GITHUB_OUTPUT
 
+      # 結果のサマリーを出力するステップ
       - name: Summary
         run: |
+          # GitHub Actionsのステップサマリーに結果を出力
           echo "### AI PR 比率 (${{ steps.counts.outputs.start }}–${{ steps.counts.outputs.end }})" >> $GITHUB_STEP_SUMMARY
           echo "- AI PR: ${{ steps.counts.outputs.ai }}" >> $GITHUB_STEP_SUMMARY
           echo "- 全 PR: ${{ steps.counts.outputs.all }}" >> $GITHUB_STEP_SUMMARY
