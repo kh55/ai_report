@@ -44,7 +44,7 @@ jobs:
         id: counts
         env:
           GH_TOKEN: ${{ secrets.METRICS_TOKEN }}  # GitHub APIの認証トークン
-          ORG: ${{ github.repository_owner }}      # リポジトリのオーナーを組織名として使用
+          OWNER: ${{ github.repository_owner }}    # リポジトリのオーナー
           AI_LABELS: ${{ github.event.inputs.ai_labels || 'ai,ai-generated,ai-assist' }}  # AI関連PRのラベル
         run: |
           # エラーハンドリング用の関数
@@ -58,8 +58,8 @@ jobs:
             handle_error "METRICS_TOKEN is not set"
           fi
 
-          if [ -z "$ORG" ]; then
-            handle_error "ORG is not set"
+          if [ -z "$OWNER" ]; then
+            handle_error "OWNER is not set"
           fi
 
           # AIラベルの設定
@@ -107,13 +107,13 @@ jobs:
             echo "$body"
           }
 
-          # 組織内のリポジトリ一覧を取得
-          echo "Fetching repositories for organization: $ORG"
-          repos_response=$(make_api_request "https://api.github.com/orgs/$ORG/repos?per_page=100")
+          # ユーザーのリポジトリ一覧を取得
+          echo "Fetching repositories for user: $OWNER"
+          repos_response=$(make_api_request "https://api.github.com/users/$OWNER/repos?per_page=100")
           repos=$(echo "$repos_response" | jq -r '.[].name')
           
           if [ -z "$repos" ]; then
-            handle_error "No repositories found for organization: $ORG"
+            handle_error "No repositories found for user: $OWNER"
           fi
 
           # リポジトリごとの結果を格納する配列
@@ -127,7 +127,7 @@ jobs:
             echo "Processing repository: $repo"
             
             # AIラベルが付いたマージ済みPRの数を取得
-            ai_response=$(make_api_request "https://api.github.com/search/issues?q=repo:$ORG/$repo+is:pr+is:merged+($label_query)+merged:$start..$end")
+            ai_response=$(make_api_request "https://api.github.com/search/issues?q=repo:$OWNER/$repo+is:pr+is:merged+($label_query)+merged:$start..$end")
             ai_count=$(echo "$ai_response" | jq -r '.total_count')
             if [ "$ai_count" = "null" ]; then
               handle_error "Failed to parse AI PR count for repo $repo: $ai_response"
@@ -136,7 +136,7 @@ jobs:
             total_ai=$((total_ai + ai_count))
 
             # 全マージ済みPRの数を取得
-            all_response=$(make_api_request "https://api.github.com/search/issues?q=repo:$ORG/$repo+is:pr+is:merged+merged:$start..$end")
+            all_response=$(make_api_request "https://api.github.com/search/issues?q=repo:$OWNER/$repo+is:pr+is:merged+merged:$start..$end")
             all_count=$(echo "$all_response" | jq -r '.total_count')
             if [ "$all_count" = "null" ]; then
               handle_error "Failed to parse total PR count for repo $repo: $all_response"
