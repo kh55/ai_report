@@ -95,10 +95,15 @@ jobs:
 
           # APIリクエスト用の関数
           make_api_request() {
+            local url=$1
             local response
-            response=$(curl -s -w "\n%{http_code}" -H "Authorization: Bearer $GH_TOKEN" "$1")
+            echo "Making API request to: $url"
+            response=$(curl -s -w "\n%{http_code}" -H "Authorization: Bearer $GH_TOKEN" "$url")
             local status_code=$(echo "$response" | tail -n1)
             local body=$(echo "$response" | sed '$d')
+            
+            echo "Response status code: $status_code"
+            echo "Response body: $body"
             
             if [ "$status_code" -ne 200 ]; then
               handle_error "GitHub API request failed with status $status_code: $body"
@@ -110,11 +115,20 @@ jobs:
           # ユーザーのリポジトリ一覧を取得
           echo "Fetching repositories for user: $OWNER"
           repos_response=$(make_api_request "https://api.github.com/users/$OWNER/repos?per_page=100")
+          
+          # レスポンスの検証
+          if ! echo "$repos_response" | jq -e . >/dev/null 2>&1; then
+            handle_error "Invalid JSON response from GitHub API: $repos_response"
+          fi
+          
           repos=$(echo "$repos_response" | jq -r '.[].name')
           
           if [ -z "$repos" ]; then
             handle_error "No repositories found for user: $OWNER"
           fi
+
+          echo "Found repositories:"
+          echo "$repos"
 
           # リポジトリごとの結果を格納する配列
           declare -A repo_ai_counts
@@ -127,20 +141,38 @@ jobs:
             echo "Processing repository: $repo"
             
             # AIラベルが付いたマージ済みPRの数を取得
-            ai_response=$(make_api_request "https://api.github.com/search/issues?q=repo:$OWNER/$repo+is:pr+is:merged+($label_query)+merged:$start..$end")
+            ai_query="https://api.github.com/search/issues?q=repo:$OWNER/$repo+is:pr+is:merged+($label_query)+merged:$start..$end"
+            echo "AI PR query: $ai_query"
+            ai_response=$(make_api_request "$ai_query")
+            
+            # レスポンスの検証
+            if ! echo "$ai_response" | jq -e . >/dev/null 2>&1; then
+              handle_error "Invalid JSON response for AI PR count: $ai_response"
+            fi
+            
             ai_count=$(echo "$ai_response" | jq -r '.total_count')
             if [ "$ai_count" = "null" ]; then
               handle_error "Failed to parse AI PR count for repo $repo: $ai_response"
             fi
+            echo "AI PR count for $repo: $ai_count"
             repo_ai_counts[$repo]=$ai_count
             total_ai=$((total_ai + ai_count))
 
             # 全マージ済みPRの数を取得
-            all_response=$(make_api_request "https://api.github.com/search/issues?q=repo:$OWNER/$repo+is:pr+is:merged+merged:$start..$end")
+            all_query="https://api.github.com/search/issues?q=repo:$OWNER/$repo+is:pr+is:merged+merged:$start..$end"
+            echo "All PR query: $all_query"
+            all_response=$(make_api_request "$all_query")
+            
+            # レスポンスの検証
+            if ! echo "$all_response" | jq -e . >/dev/null 2>&1; then
+              handle_error "Invalid JSON response for total PR count: $all_response"
+            fi
+            
             all_count=$(echo "$all_response" | jq -r '.total_count')
             if [ "$all_count" = "null" ]; then
               handle_error "Failed to parse total PR count for repo $repo: $all_response"
             fi
+            echo "Total PR count for $repo: $all_count"
             repo_all_counts[$repo]=$all_count
             total_all=$((total_all + all_count))
           done
