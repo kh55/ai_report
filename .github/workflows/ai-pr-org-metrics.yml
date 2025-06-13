@@ -60,24 +60,26 @@ jobs:
           # 手動実行で日付が指定された場合はその日付を使用
           # 指定がない場合は前週の月曜日から日曜日を使用
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.start_date }}" ] && [ -n "${{ github.event.inputs.end_date }}" ]; then
-            start="${{ github.event.inputs.start_date }}"
-            end="${{ github.event.inputs.end_date }}"
-            
             # 日付形式の検証
-            if ! date -d "$start" >/dev/null 2>&1; then
-              handle_error "Invalid start date format: $start"
+            if ! date -d "${{ github.event.inputs.start_date }}" >/dev/null 2>&1; then
+              handle_error "Invalid start date format: ${{ github.event.inputs.start_date }}"
             fi
-            if ! date -d "$end" >/dev/null 2>&1; then
-              handle_error "Invalid end date format: $end"
+            if ! date -d "${{ github.event.inputs.end_date }}" >/dev/null 2>&1; then
+              handle_error "Invalid end date format: ${{ github.event.inputs.end_date }}"
             fi
             
             # 日付の順序チェック
-            if [ "$(date -d "$start" +%s)" -gt "$(date -d "$end" +%s)" ]; then
-              handle_error "Start date ($start) is after end date ($end)"
+            if [ "$(date -d "${{ github.event.inputs.start_date }}" +%s)" -gt "$(date -d "${{ github.event.inputs.end_date }}" +%s)" ]; then
+              handle_error "Start date (${{ github.event.inputs.start_date }}) is after end date (${{ github.event.inputs.end_date }})"
             fi
+
+            # 開始日は0時、終了日は23:59:59に設定（日本時間）
+            start="${{ github.event.inputs.start_date }}T00:00:00+09:00"
+            end="${{ github.event.inputs.end_date }}T23:59:59+09:00"
           else
-            start=$(date -u -d 'last week monday' +%F)
-            end=$(date -u -d 'last week sunday' +%F)
+            # 自動実行時は前週の月曜日0時から日曜日23:59:59（日本時間）
+            start=$(date -d 'last week monday' +%FT00:00:00+09:00)
+            end=$(date -d 'last week sunday' +%FT23:59:59+09:00)
           fi
 
           # APIリクエスト用の関数
