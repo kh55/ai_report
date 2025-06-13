@@ -44,7 +44,7 @@ jobs:
         id: counts
         env:
           GH_TOKEN: ${{ secrets.METRICS_TOKEN }}  # GitHub APIの認証トークン
-          ORG: MyOrg                              # 対象のGitHub組織名
+          ORG: ${{ github.repository_owner }}      # リポジトリのオーナーを組織名として使用
           AI_LABELS: ${{ github.event.inputs.ai_labels || 'ai,ai-generated,ai-assist' }}  # AI関連PRのラベル
         run: |
           # エラーハンドリング用の関数
@@ -108,8 +108,13 @@ jobs:
           }
 
           # 組織内のリポジトリ一覧を取得
+          echo "Fetching repositories for organization: $ORG"
           repos_response=$(make_api_request "https://api.github.com/orgs/$ORG/repos?per_page=100")
           repos=$(echo "$repos_response" | jq -r '.[].name')
+          
+          if [ -z "$repos" ]; then
+            handle_error "No repositories found for organization: $ORG"
+          fi
 
           # リポジトリごとの結果を格納する配列
           declare -A repo_ai_counts
@@ -119,6 +124,8 @@ jobs:
 
           # 各リポジトリのPR数を取得
           for repo in $repos; do
+            echo "Processing repository: $repo"
+            
             # AIラベルが付いたマージ済みPRの数を取得
             ai_response=$(make_api_request "https://api.github.com/search/issues?q=repo:$ORG/$repo+is:pr+is:merged+($label_query)+merged:$start..$end")
             ai_count=$(echo "$ai_response" | jq -r '.total_count')
