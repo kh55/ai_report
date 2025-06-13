@@ -22,6 +22,18 @@ jobs:
   calc:
     runs-on: ubuntu-latest
     steps:
+      # 必要なツールのインストール
+      - name: Install required tools
+        run: |
+          if ! command -v jq &> /dev/null; then
+            echo "::error::jq is not installed"
+            exit 1
+          fi
+          if ! command -v bc &> /dev/null; then
+            echo "::error::bc is not installed"
+            exit 1
+          fi
+
       # PRの数を取得するステップ
       - name: Get counts
         id: counts
@@ -29,22 +41,44 @@ jobs:
           GH_TOKEN: ${{ secrets.METRICS_TOKEN }}  # GitHub APIの認証トークン
           ORG: MyOrg                              # 対象のGitHub組織名
         run: |
+          # エラーハンドリング用の関数
+          handle_error() {
+            echo "::error::$1"
+            exit 1
+          }
+
+          # 環境変数のチェック
+          if [ -z "$GH_TOKEN" ]; then
+            handle_error "METRICS_TOKEN is not set"
+          fi
+
+          if [ -z "$ORG" ]; then
+            handle_error "ORG is not set"
+          fi
+
           # 日付の設定
           # 手動実行で日付が指定された場合はその日付を使用
           # 指定がない場合は前週の月曜日から日曜日を使用
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.start_date }}" ] && [ -n "${{ github.event.inputs.end_date }}" ]; then
             start="${{ github.event.inputs.start_date }}"
             end="${{ github.event.inputs.end_date }}"
+            
+            # 日付形式の検証
+            if ! date -d "$start" >/dev/null 2>&1; then
+              handle_error "Invalid start date format: $start"
+            fi
+            if ! date -d "$end" >/dev/null 2>&1; then
+              handle_error "Invalid end date format: $end"
+            fi
+            
+            # 日付の順序チェック
+            if [ "$(date -d "$start" +%s)" -gt "$(date -d "$end" +%s)" ]; then
+              handle_error "Start date ($start) is after end date ($end)"
+            fi
           else
             start=$(date -u -d 'last week monday' +%F)
             end=$(date -u -d 'last week sunday' +%F)
           fi
-
-          # エラーハンドリング用の関数
-          handle_error() {
-            echo "::error::$1"
-            exit 1
-          }
 
           # APIリクエスト用の関数
           make_api_request() {
