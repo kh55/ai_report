@@ -40,13 +40,39 @@ jobs:
             end=$(date -u -d 'last week sunday' +%F)
           fi
 
+          # エラーハンドリング用の関数
+          handle_error() {
+            echo "::error::$1"
+            exit 1
+          }
+
+          # APIリクエスト用の関数
+          make_api_request() {
+            local response
+            response=$(curl -s -w "\n%{http_code}" -H "Authorization: Bearer $GH_TOKEN" "$1")
+            local status_code=$(echo "$response" | tail -n1)
+            local body=$(echo "$response" | sed '$d')
+            
+            if [ "$status_code" -ne 200 ]; then
+              handle_error "GitHub API request failed with status $status_code: $body"
+            fi
+            
+            echo "$body"
+          }
+
           # AIラベルが付いたマージ済みPRの数を取得
-          ai=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
-            "https://api.github.com/search/issues?q=org:$ORG+is:pr+is:merged+label:ai+merged:$start..$end" | jq .total_count)
+          ai_response=$(make_api_request "https://api.github.com/search/issues?q=org:$ORG+is:pr+is:merged+label:ai+merged:$start..$end")
+          ai=$(echo "$ai_response" | jq -r '.total_count')
+          if [ "$ai" = "null" ]; then
+            handle_error "Failed to parse AI PR count from response: $ai_response"
+          fi
 
           # 全マージ済みPRの数を取得
-          all=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
-            "https://api.github.com/search/issues?q=org:$ORG+is:pr+is:merged+merged:$start..$end" | jq .total_count)
+          all_response=$(make_api_request "https://api.github.com/search/issues?q=org:$ORG+is:pr+is:merged+merged:$start..$end")
+          all=$(echo "$all_response" | jq -r '.total_count')
+          if [ "$all" = "null" ]; then
+            handle_error "Failed to parse total PR count from response: $all_response"
+          fi
 
           # AI PRの比率を計算（小数点第1位まで）
           pct=0; [ "$all" -gt 0 ] && pct=$(echo "scale=1; $ai*100/$all" | bc)
