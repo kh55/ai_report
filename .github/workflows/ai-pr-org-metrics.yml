@@ -195,4 +195,5 @@ jobs:
           if [ "${{ steps.counts.outputs.total_all }}" -eq 0 ]; then
             echo "指定された期間にマージされたPRはありませんでした。" >> $GITHUB_STEP_SUMMARY
           else
-            echo '${{ steps.counts.outputs.repo_results }}' | jq -r 'to_entries | .[] | "- **\(.key)**: AI PR: \(.value.ai), 全 PR: \(.value.all), 比率: \(.value.pct)%"' >> $GITHUB_STEP_SUMMARY 
+            echo '${{ steps.counts.outputs.repo_results }}' | jq -r 'to_entries | .[] | "- **\(.key)**: AI PR: \(.value.ai), 全 PR: \(.value.all), 比率: \(.value.pct)%"' >> $GITHUB_STEP_SUMMARY
+          fi
