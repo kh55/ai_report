@@ -40,179 +40,101 @@ jobs:
           fi
 
       # PRの数を取得するステップ
-      - name: Get counts
+      - name: Get PR counts
         id: counts
         env:
           GH_TOKEN: ${{ secrets.METRICS_TOKEN }}  # GitHub APIの認証トークン
           OWNER: ${{ github.repository_owner }}    # リポジトリのオーナー
           AI_LABELS: ${{ github.event.inputs.ai_labels || 'ai,ai-generated,ai-assist' }}  # AI関連PRのラベル
         run: |
-          # エラーハンドリング用の関数
-          handle_error() {
-            echo "::error::$1"
-            exit 1
-          }
-
           # 環境変数のチェック
           if [ -z "$GH_TOKEN" ]; then
-            handle_error "METRICS_TOKEN is not set"
+            echo "::error::METRICS_TOKEN is not set"
+            exit 1
           fi
-
-          if [ -z "$OWNER" ]; then
-            handle_error "OWNER is not set"
-          fi
-
-          # AIラベルの設定
-          # カンマ区切りのラベルを "label:ai OR label:ai-generated" 形式に変換
-          # 大文字小文字を区別しないように、各ラベルを小文字に変換
-          label_query=$(echo "$AI_LABELS" | tr '[:upper:]' '[:lower:]' | tr ',' '\n' | sed 's/^/label:/' | paste -sd ' OR ' -)
 
           # 日付の設定
-          # 手動実行で日付が指定された場合はその日付を使用
-          # 指定がない場合は前週の月曜日から日曜日を使用
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.start_date }}" ] && [ -n "${{ github.event.inputs.end_date }}" ]; then
-            # 日付形式の検証
-            if ! date -d "${{ github.event.inputs.start_date }}" >/dev/null 2>&1; then
-              handle_error "Invalid start date format: ${{ github.event.inputs.start_date }}"
-            fi
-            if ! date -d "${{ github.event.inputs.end_date }}" >/dev/null 2>&1; then
-              handle_error "Invalid end date format: ${{ github.event.inputs.end_date }}"
-            fi
-            
-            # 日付の順序チェック
-            if [ "$(date -d "${{ github.event.inputs.start_date }}" +%s)" -gt "$(date -d "${{ github.event.inputs.end_date }}" +%s)" ]; then
-              handle_error "Start date (${{ github.event.inputs.start_date }}) is after end date (${{ github.event.inputs.end_date }})"
-            fi
-
-            # 開始日は0時、終了日は23:59:59に設定（日本時間）
             start="${{ github.event.inputs.start_date }}T00:00:00+09:00"
             end="${{ github.event.inputs.end_date }}T23:59:59+09:00"
           else
-            # 自動実行時は前週の月曜日0時から日曜日23:59:59（日本時間）
             start=$(date -d 'last week monday' +%FT00:00:00+09:00)
             end=$(date -d 'last week sunday' +%FT23:59:59+09:00)
           fi
 
-          # APIリクエスト用の関数
-          make_api_request() {
-            local url=$1
-            local response
-            echo "::debug::Making API request to: $url" >&2
-            response=$(curl -s -w "\n%{http_code}" \
-              -H "Authorization: Bearer $GH_TOKEN" \
-              -H "Accept: application/vnd.github.v3+json" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              "$url")
-            local status_code=$(echo "$response" | tail -n1)
-            local body=$(echo "$response" | sed '$d')
-            
-            echo "::debug::Response status code: $status_code" >&2
-            echo "::debug::Response body: $body" >&2
-            
-            if [ "$status_code" -ne 200 ]; then
-              handle_error "GitHub API request failed with status $status_code: $body"
-            fi
-            
-            # JSONの検証
-            if ! echo "$body" | jq -e . >/dev/null 2>&1; then
-              handle_error "Invalid JSON response: $body"
-            fi
-            
-            echo "$body"
-          }
+          echo "Date range: $start to $end"
 
-          # ユーザーのリポジトリ一覧を取得
-          echo "Fetching repositories for user: $OWNER"
-          repos_response=$(make_api_request "https://api.github.com/users/$OWNER/repos?per_page=100")
-          
-          # レスポンスの検証
-          if ! echo "$repos_response" | jq -e . >/dev/null 2>&1; then
-            handle_error "Invalid JSON response from GitHub API: $repos_response"
-          fi
-          
-          repos=$(echo "$repos_response" | jq -r '.[].name')
-          
+          # AIラベルクエリの作成
+          label_query=$(echo "$AI_LABELS" | tr '[:upper:]' '[:lower:]' | tr ',' '\n' | sed 's/^/label:/' | paste -sd ' OR ' -)
+          echo "AI labels query: $label_query"
+
+          # リポジトリ一覧を取得
+          echo "Fetching repositories..."
+          repos=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/users/$OWNER/repos?per_page=100" | \
+            jq -r '.[].name' 2>/dev/null || echo "")
+
           if [ -z "$repos" ]; then
-            handle_error "No repositories found for user: $OWNER"
+            echo "::error::No repositories found or API request failed"
+            exit 1
           fi
 
-          echo "Found repositories:"
-          echo "$repos"
-
-          # リポジトリごとの結果を格納する配列
-          declare -A repo_ai_counts
-          declare -A repo_all_counts
-          total_ai=0
-          total_all=0
+          echo "Found repositories: $(echo "$repos" | wc -l)"
 
           # 各リポジトリのPR数を取得
-          for repo in $repos; do
-            echo "Processing repository: $repo"
-            
-            # AIラベルが付いたマージ済みPRの数を取得
-            ai_query="https://api.github.com/search/issues?q=repo:$OWNER/$repo+is:pr+is:merged+($label_query)+merged:$start..$end"
-            echo "::debug::AI PR query: $ai_query" >&2
-            ai_response=$(make_api_request "$ai_query")
-            
-            # レスポンスの検証
-            if ! echo "$ai_response" | jq -e . >/dev/null 2>&1; then
-              echo "::warning::Invalid JSON response for AI PR count in repo $repo, using 0"
-              ai_count=0
-            else
-              ai_count=$(echo "$ai_response" | jq -r '.total_count')
-              if [ "$ai_count" = "null" ]; then
-                echo "::warning::No AI PR count found for repo $repo, using 0"
-                ai_count=0
-              fi
-            fi
-            echo "AI PR count for $repo: $ai_count"
-            repo_ai_counts[$repo]=$ai_count
-            total_ai=$((total_ai + ai_count))
-
-            # 全マージ済みPRの数を取得
-            all_query="https://api.github.com/search/issues?q=repo:$OWNER/$repo+is:pr+is:merged+merged:$start..$end"
-            echo "::debug::All PR query: $all_query" >&2
-            all_response=$(make_api_request "$all_query")
-            
-            # レスポンスの検証
-            if ! echo "$all_response" | jq -e . >/dev/null 2>&1; then
-              echo "::warning::Invalid JSON response for total PR count in repo $repo, using 0"
-              all_count=0
-            else
-              all_count=$(echo "$all_response" | jq -r '.total_count')
-              if [ "$all_count" = "null" ]; then
-                echo "::warning::No total PR count found for repo $repo, using 0"
-                all_count=0
-              fi
-            fi
-            echo "Total PR count for $repo: $all_count"
-            repo_all_counts[$repo]=$all_count
-            total_all=$((total_all + all_count))
-          done
-
-          # 全体のAI PRの比率を計算（小数点第1位まで）
-          total_pct=0; [ "$total_all" -gt 0 ] && total_pct=$(echo "scale=1; $total_ai*100/$total_all" | bc)
-
-          # 結果をGitHub Actionsの出力に保存
-          echo "total_ai=$total_ai" >> $GITHUB_OUTPUT
-          echo "total_all=$total_all" >> $GITHUB_OUTPUT
-          echo "total_pct=$total_pct" >> $GITHUB_OUTPUT
-          echo "start=$start" >> $GITHUB_OUTPUT
-          echo "end=$end" >> $GITHUB_OUTPUT
-          echo "labels=$AI_LABELS" >> $GITHUB_OUTPUT
-
-          # リポジトリごとの結果をJSON形式で保存
+          total_ai=0
+          total_all=0
           repo_results="{}"
+
           for repo in $repos; do
-            ai_count=${repo_ai_counts[$repo]}
-            all_count=${repo_all_counts[$repo]}
-            pct=0; [ "$all_count" -gt 0 ] && pct=$(echo "scale=1; $ai_count*100/$all_count" | bc)
+            echo "Processing: $repo"
+            
+            # AI PRの数を取得
+            ai_count=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/search/issues?q=repo:$OWNER/$repo+is:pr+is:merged+($label_query)+merged:$start..$end" | \
+              jq -r '.total_count // 0' 2>/dev/null || echo "0")
+            
+            # 全PRの数を取得
+            all_count=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/search/issues?q=repo:$OWNER/$repo+is:pr+is:merged+merged:$start..$end" | \
+              jq -r '.total_count // 0' 2>/dev/null || echo "0")
+            
+            echo "  AI PRs: $ai_count, All PRs: $all_count"
+            
+            total_ai=$((total_ai + ai_count))
+            total_all=$((total_all + all_count))
+            
+            # 比率計算
+            pct=0
+            if [ "$all_count" -gt 0 ]; then
+              pct=$(echo "scale=1; $ai_count*100/$all_count" | bc)
+            fi
+            
+            # JSON結果に追加
             repo_results=$(echo "$repo_results" | jq --arg repo "$repo" \
               --arg ai "$ai_count" \
               --arg all "$all_count" \
               --arg pct "$pct" \
               '. + {($repo): {"ai": $ai, "all": $all, "pct": $pct}}')
           done
+
+          # 全体の比率計算
+          total_pct=0
+          if [ "$total_all" -gt 0 ]; then
+            total_pct=$(echo "scale=1; $total_ai*100/$total_all" | bc)
+          fi
+
+          echo "Total AI PRs: $total_ai"
+          echo "Total PRs: $total_all"
+          echo "Percentage: $total_pct%"
+
+          # 結果を出力
+          echo "total_ai=$total_ai" >> $GITHUB_OUTPUT
+          echo "total_all=$total_all" >> $GITHUB_OUTPUT
+          echo "total_pct=$total_pct" >> $GITHUB_OUTPUT
+          echo "start=$start" >> $GITHUB_OUTPUT
+          echo "end=$end" >> $GITHUB_OUTPUT
+          echo "labels=$AI_LABELS" >> $GITHUB_OUTPUT
           echo "repo_results=$repo_results" >> $GITHUB_OUTPUT
 
       # 結果のサマリーを出力するステップ
