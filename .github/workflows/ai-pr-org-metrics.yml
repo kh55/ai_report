@@ -84,7 +84,10 @@ jobs:
           # 各リポジトリのPR数を取得
           total_ai=0
           total_all=0
-          repo_results="{}"
+          
+          # 一時ファイルでJSON結果を構築
+          temp_file=$(mktemp)
+          echo "{}" > "$temp_file"
 
           for repo in $repos; do
             echo "Processing: $repo"
@@ -105,21 +108,22 @@ jobs:
             total_all=$((total_all + all_count))
             
             # 比率計算
-            pct=0
+            pct="0"
             if [ "$all_count" -gt 0 ]; then
               pct=$(echo "scale=1; $ai_count*100/$all_count" | bc)
             fi
             
-            # JSON結果に追加
-            repo_results=$(echo "$repo_results" | jq --arg repo "$repo" \
-              --arg ai "$ai_count" \
-              --arg all "$all_count" \
-              --arg pct "$pct" \
-              '. + {($repo): {"ai": $ai, "all": $all, "pct": $pct}}')
+            # JSON結果に追加（一時ファイルを使用）
+            jq --arg repo "$repo" \
+               --arg ai "$ai_count" \
+               --arg all "$all_count" \
+               --arg pct "$pct" \
+               '. + {($repo): {"ai": ($ai | tonumber), "all": ($all | tonumber), "pct": ($pct | tonumber)}}' \
+               "$temp_file" > "${temp_file}.tmp" && mv "${temp_file}.tmp" "$temp_file"
           done
 
           # 全体の比率計算
-          total_pct=0
+          total_pct="0"
           if [ "$total_all" -gt 0 ]; then
             total_pct=$(echo "scale=1; $total_ai*100/$total_all" | bc)
           fi
@@ -128,6 +132,10 @@ jobs:
           echo "Total PRs: $total_all"
           echo "Percentage: $total_pct%"
 
+          # JSON結果を読み取り
+          repo_results=$(cat "$temp_file")
+          rm -f "$temp_file"
+
           # 結果を出力
           echo "total_ai=$total_ai" >> $GITHUB_OUTPUT
           echo "total_all=$total_all" >> $GITHUB_OUTPUT
@@ -135,7 +143,13 @@ jobs:
           echo "start=$start" >> $GITHUB_OUTPUT
           echo "end=$end" >> $GITHUB_OUTPUT
           echo "labels=$AI_LABELS" >> $GITHUB_OUTPUT
-          echo "repo_results=$repo_results" >> $GITHUB_OUTPUT
+          
+          # JSON結果をエスケープして出力
+          {
+            echo "repo_results<<EOF"
+            echo "$repo_results"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
 
       # 結果のサマリーを出力するステップ
       - name: Summary
@@ -150,4 +164,4 @@ jobs:
           echo "- 対象ラベル: ${{ steps.counts.outputs.labels }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "#### リポジトリ別" >> $GITHUB_STEP_SUMMARY
-          echo "${{ steps.counts.outputs.repo_results }}" | jq -r 'to_entries | .[] | "- **\(.key)**: AI PR: \(.value.ai), 全 PR: \(.value.all), 比率: \(.value.pct)%"' >> $GITHUB_STEP_SUMMARY 
+          echo '${{ steps.counts.outputs.repo_results }}' | jq -r 'to_entries | .[] | "- **\(.key)**: AI PR: \(.value.ai), 全 PR: \(.value.all), 比率: \(.value.pct)%"' >> $GITHUB_STEP_SUMMARY 
