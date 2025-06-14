@@ -80,6 +80,8 @@ jobs:
           fi
 
           echo "Found repositories: $(echo "$repos" | wc -l)"
+          echo "Repository list:"
+          echo "$repos" | sed 's/^/  - /'
 
           # 各リポジトリのPR数を取得
           total_ai=0
@@ -89,8 +91,13 @@ jobs:
           temp_file=$(mktemp)
           echo "{}" > "$temp_file"
 
+          # デバッグ用のサマリー情報
+          repo_summary=""
+
           for repo in $repos; do
-            echo "Processing: $repo"
+            echo "========================================="
+            echo "Processing repository: $repo"
+            echo "========================================="
             
             # まず、そのリポジトリに何かPRがあるかチェック
             any_pr_query="https://api.github.com/search/issues?q=repo:$OWNER/$repo+is:pr"
@@ -114,7 +121,7 @@ jobs:
             all_count=$(curl -s -H "Authorization: Bearer $GH_TOKEN" "$all_query" | \
               jq -r '.total_count // 0' 2>/dev/null || echo "0")
             
-            echo "  AI PRs: $ai_count, All merged PRs: $all_count"
+            echo "  Results: AI PRs: $ai_count, All merged PRs: $all_count"
             
             # デバッグ: 実際のAPIレスポンスを確認
             if [ "$all_count" -eq 0 ] && [ "$any_pr_count" -gt 0 ]; then
@@ -125,6 +132,10 @@ jobs:
               recent_pr_date=$(echo "$recent_pr_response" | jq -r '.items[0].closed_at // "none"' 2>/dev/null || echo "none")
               echo "  Most recent merged PR date: $recent_pr_date"
             fi
+            
+            # サマリー情報を追加
+            repo_summary="${repo_summary}
+$repo: Total PRs=$any_pr_count, Merged in range=$all_count, AI PRs=$ai_count"
             
             total_ai=$((total_ai + ai_count))
             total_all=$((total_all + all_count))
@@ -144,12 +155,19 @@ jobs:
                "$temp_file" > "${temp_file}.tmp" && mv "${temp_file}.tmp" "$temp_file"
           done
 
+          echo "========================================="
+          echo "SUMMARY OF ALL REPOSITORIES"
+          echo "========================================="
+          echo "$repo_summary"
+          echo "========================================="
+
           # 全体の比率計算
           total_pct="0"
           if [ "$total_all" -gt 0 ]; then
             total_pct=$(echo "scale=1; $total_ai*100/$total_all" | bc)
           fi
 
+          echo "FINAL TOTALS:"
           echo "Total AI PRs: $total_ai"
           echo "Total PRs: $total_all"
           echo "Percentage: $total_pct%"
