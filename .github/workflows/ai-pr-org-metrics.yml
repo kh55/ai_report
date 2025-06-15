@@ -113,11 +113,17 @@ jobs:
             all_pr_merged_count=$(curl -s -H "Authorization: Bearer $GH_TOKEN" "$all_pr_query" | jq -r '.total_count // 0' 2>/dev/null || echo "0")
             echo "  PRs merged in date range: $all_pr_merged_count"
             
-            # AI PRの数を取得
-            ai_query="https://api.github.com/search/issues?q=repo:$OWNER/$repo+is:pr+is:merged+($label_query)+merged:$start..$end"
-            echo "  AI PR query: $ai_query"
-            ai_count=$(curl -s -H "Authorization: Bearer $GH_TOKEN" "$ai_query" | \
-              jq -r '.total_count // 0' 2>/dev/null || echo "0")
+            # AI PRの数を取得（複数のラベルで順次検索）
+            ai_count=0
+            for label in "AI" "ai" "ai-generated" "ai-assist"; do
+              ai_query="https://api.github.com/search/issues?q=repo:$OWNER/$repo+is:pr+is:merged+label:$label+merged:$start..$end"
+              echo "  AI PR query for $label: $ai_query"
+              label_response=$(curl -s -H "Authorization: Bearer $GH_TOKEN" "$ai_query")
+              label_count=$(echo "$label_response" | jq -r '.total_count // 0' 2>/dev/null || echo "0")
+              echo "  Results for $label: $label_count PRs"
+              ai_count=$((ai_count + label_count))
+            done
+            echo "  Total AI PRs: $ai_count"
             
             # 全マージ済みPRの数を取得
             all_query="https://api.github.com/search/issues?q=repo:$OWNER/$repo+is:pr+is:merged+merged:$start..$end"
@@ -145,8 +151,8 @@ jobs:
             
             # 比率計算
             pct="0"
-            if [ "$all_count" -gt 0 ]; then
-              pct=$(echo "scale=1; $ai_count*100/$all_count" | bc)
+            if [ "$all_count" -gt 0 ] && [ "$ai_count" != "" ]; then
+              pct=$(echo "scale=1; $ai_count*100/$all_count" | bc 2>/dev/null || echo "0")
             fi
             
             # JSON結果に追加（一時ファイルを使用）
@@ -166,8 +172,8 @@ jobs:
 
           # 全体の比率計算
           total_pct="0"
-          if [ "$total_all" -gt 0 ]; then
-            total_pct=$(echo "scale=1; $total_ai*100/$total_all" | bc)
+          if [ "$total_all" -gt 0 ] && [ "$total_ai" != "" ]; then
+            total_pct=$(echo "scale=1; $total_ai*100/$total_all" | bc 2>/dev/null || echo "0")
           fi
 
           echo "FINAL TOTALS:"
