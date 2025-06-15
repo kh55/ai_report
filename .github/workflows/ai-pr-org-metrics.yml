@@ -134,8 +134,7 @@ jobs:
             fi
             
             # サマリー情報を追加
-            repo_summary="${repo_summary}
-$repo: Total PRs=$any_pr_count, Merged in range=$all_count, AI PRs=$ai_count"
+            repo_summary="$repo_summary$repo: Total PRs=$any_pr_count, Merged in range=$all_count, AI PRs=$ai_count "
             
             total_ai=$((total_ai + ai_count))
             total_all=$((total_all + all_count))
