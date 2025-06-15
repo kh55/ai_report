@@ -55,11 +55,11 @@ jobs:
 
           # 日付の設定
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.start_date }}" ] && [ -n "${{ github.event.inputs.end_date }}" ]; then
-            start="${{ github.event.inputs.start_date }}T00:00:00+09:00"
-            end="${{ github.event.inputs.end_date }}T23:59:59+09:00"
+            start="${{ github.event.inputs.start_date }}"
+            end="${{ github.event.inputs.end_date }}"
           else
-            start=$(date -d 'last week monday' +%FT00:00:00+09:00)
-            end=$(date -d 'last week sunday' +%FT23:59:59+09:00)
+            start=$(date -d 'last week monday' +%F)
+            end=$(date -d 'last week sunday' +%F)
           fi
 
           echo "Date range: $start to $end"
