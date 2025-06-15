@@ -20,7 +20,7 @@ on:
         description: 'AI関連PRのラベル（カンマ区切り）'
         required: false
         type: string
-        default: 'ai,ai-generated,ai-assist'
+        default: 'AI,ai,ai-generated,ai-assist'
 
 jobs:
   # メインの計算ジョブ
@@ -45,7 +45,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.METRICS_TOKEN }}  # GitHub APIの認証トークン
           OWNER: ${{ github.repository_owner }}    # リポジトリのオーナー
-          AI_LABELS: ${{ github.event.inputs.ai_labels || 'ai,ai-generated,ai-assist' }}  # AI関連PRのラベル
+          AI_LABELS: ${{ github.event.inputs.ai_labels || 'AI,ai,ai-generated,ai-assist' }}  # AI関連PRのラベル
         run: |
           # 環境変数のチェック
           if [ -z "$GH_TOKEN" ]; then
@@ -55,17 +55,19 @@ jobs:
 
           # 日付の設定
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.start_date }}" ] && [ -n "${{ github.event.inputs.end_date }}" ]; then
-            start="${{ github.event.inputs.start_date }}T00:00:00+09:00"
-            end="${{ github.event.inputs.end_date }}T23:59:59+09:00"
+            start="${{ github.event.inputs.start_date }}"
+            end="${{ github.event.inputs.end_date }}"
           else
-            start=$(date -d 'last week monday' +%FT00:00:00+09:00)
-            end=$(date -d 'last week sunday' +%FT23:59:59+09:00)
+            start=$(date -d 'last week monday' +%F)
+            end=$(date -d 'last week sunday' +%F)
           fi
 
           echo "Date range: $start to $end"
 
-          # AIラベルクエリの作成
-          label_query=$(echo "$AI_LABELS" | tr '[:upper:]' '[:lower:]' | tr ',' '\n' | sed 's/^/label:/' | paste -sd ' OR ' -)
+          # AIラベルクエリの作成（大文字小文字両方をサポート）
+          original_labels=$(echo "$AI_LABELS" | tr ',' '\n' | sed 's/^/label:/' | paste -sd ' OR ' -)
+          lowercase_labels=$(echo "$AI_LABELS" | tr '[:upper:]' '[:lower:]' | tr ',' '\n' | sed 's/^/label:/' | paste -sd ' OR ' -)
+          label_query="($original_labels OR $lowercase_labels)"
           echo "AI labels query: $label_query"
 
           # リポジトリ一覧を取得
